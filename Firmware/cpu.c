@@ -1,3 +1,19 @@
+/** CHESSmate emulator for Arduino.
+ *  
+ *  Most of this is the 6502 emulator from Mike Chambers.
+ *  
+ *    http://forum.arduino.cc/index.php?topic=193216.0
+ *    
+ *  Project inspired by Oscar Vermeulen's KIM-1 Uno project.
+ *  
+ *    https://obsolescence.wixsite.com/obsolescence/kim-uno-summary-c1uuh
+ *    
+ *  CHESSmate code added by Michael Gardi.
+ * 
+ *    https://hackaday.io/project/194011-commodore-chessmate-reproduction
+ *    
+ */
+
 #include <stdint.h>
 #include <avr/pgmspace.h>
 
@@ -76,6 +92,7 @@ uint16_t oldpc, ea, reladdr, value, result;
 uint8_t opcode, oldcpustatus, useaccum;
 
 uint8_t RAM[RAM_SIZE];
+
 PGM_P const CHESSMATE[ROM_SIZE] PROGMEM = {
 	0xd8,0x58,0xa2,0xfe,0x9a,0xa9,0x3f,0x8d,0x03,0x8b,0xa9,0xff,0xa2,0x00,0x95,0x00,
 	0xd5,0x00,0xf0,0x05,0xb5,0x00,0x4c,0x14,0xf0,0xca,0xd0,0xf2,0x49,0xff,0xf0,0xee,
@@ -342,7 +359,7 @@ uint8_t read6502(uint16_t address) {
   // Main program?
   if (address >= CHESSMATE_ROM) {
     PGMaddr = address - CHESSMATE_ROM;
-	return(pgm_read_byte_near(CHESSMATE + PGMaddr));
+	  return(pgm_read_byte_near(CHESSMATE + PGMaddr));
   }
 
   // RAM memory.
@@ -351,7 +368,7 @@ uint8_t read6502(uint16_t address) {
   // Check for RRIOT registers.
   if (address >= RRIOT_REGISTERS && address < (RRIOT_REGISTERS + RRIOT_REG_SIZE)) {
 	  PGMaddr = address - RRIOT_REGISTERS;
-	  readRRIOT(PGMaddr);
+	  return readRRIOT(PGMaddr);
   }
 
   // Check for RRIOT RAM.
@@ -1021,7 +1038,7 @@ void irq6502() {
 }
 
 #ifdef USE_TIMING
-prog_char ticktable[256] PROGMEM = {
+PGM_P const ticktable[256] PROGMEM = {
 /*        |  0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |  A  |  B  |  C  |  D  |  E  |  F  |     */
 /* 0 */      7,    6,    2,    8,    3,    3,    5,    5,    3,    2,    2,    2,    4,    4,    6,    6,  /* 0 */
 /* 1 */      2,    5,    2,    8,    4,    4,    6,    6,    2,    4,    2,    7,    4,    4,    7,    7,  /* 1 */
@@ -1675,4 +1692,3 @@ uint16_t getpc() {
 uint8_t getop() {
   return(opcode);
 }
-
