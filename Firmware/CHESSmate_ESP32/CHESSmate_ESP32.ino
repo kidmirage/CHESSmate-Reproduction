@@ -14,9 +14,18 @@
  *
  *  This Sketch is specifically for the ESP32 WROOM.
  */
+#define SAD     0     // 6530 A DATA
+#define PADD    1     // 6530 A DATA DIRECTION
+#define SBD     2     // 6530 B DATA
+#define PBDD    3     // 6530 B DATA DIRECTION
+#define CLK1T   4     // DIV BY 1 TIME Read timer disable interrupt 
+#define CLKRDT  6     // READ TIMER
+#define CLKRDI  7     // READ TIMEOUT BIT
+#define CKINT   14    // Read timer interrupt
+#define CLKTI   15    // DIV by 1024 enable interrupts
 
 // IO pins used on the arduino.
-#define PA0 15
+#define PA0 13
 #define PA1 12
 #define PA2 14
 #define PA3 27
@@ -25,21 +34,24 @@
 #define PA6 33
 #define PA7 32
 
-#define ENTER_KEY     13
-#define CLEAR_KEY     23
-#define NEW_GAME_KEY  2
+#define ENTER_KEY     23
+#define CLEAR_KEY     22
+#define NEW_GAME_KEY  21
 
-#define CHECK_LED     0
-#define LOSES_LED     4
-#define B_W_LED       16
+#define CHECK_LED     19
+#define LOSES_LED     18
+#define B_W_LED       5
 
 #define DISPLAY_1     17
-#define DISPLAY_2     5
-#define DISPLAY_3     18
-#define DISPLAY_4     19
+#define DISPLAY_2     16
+#define DISPLAY_3     4
+#define DISPLAY_4     0
 
-#define BUZZER_1      21
-#define BUZZER_2      22
+#define BUZZER_1      2
+#define BUZZER_2      15
+
+// Millisecond value for 1 minute.
+#define PART_MINUTE   250   // 1/240th of a minute in millseconds.
 
 // Keep track of what "virtual" keyboard row has been enabled.
 int keyboard_row = 0;
@@ -47,9 +59,17 @@ int keyboard_row = 0;
 // Remember what the last write to the SBC (B data port) was.
 uint8_t sbc_value = 0;
 
+// When this value is non-zero generate an interrupt after one minute passes.
+unsigned long int_start = 0;
+
+// This is the interrupt flag. 0x00 if no interrupt, 0x80 if interrupt has been triggered.
+uint8_t int_flag = 0;
+
 extern "C" { 
   void exec6502(int32_t tickcount);
   void reset6502();
+  void irq6502();
+  uint16_t getpc();
 }
 
 void setup () {
@@ -83,8 +103,14 @@ void setup () {
 
 void loop () {
   // If timing is enabled, this value is in 6502 clock ticks.
-  // Otherwise, simply instruction count.
-  exec6502(10000);
+  exec6502(1000);
+
+  if (int_start > 0) {
+    if ((millis() - int_start) >= PART_MINUTE) {
+      int_flag = 0x80;
+      irq6502();
+    }
+  }
 }
 
 // Required functions from the emulator C code.
@@ -98,10 +124,10 @@ extern "C" {
    ********************************************************************************************/
   // Handle reads from RRIOT registers.
   uint8_t readRRIOT(uint16_t address) {
-    if (address == 2) {             // Port A Data
+    if (address == SBD) {             // Port B Data
       // Reading from PORTB. Return the previous value of PORTB.
       return sbc_value;
-    } else if (address == 0) {      // Port B Data
+    } else if (address == SAD) {      // Port A Data
       // Check for NEW GAME. (Reset)
       if (digitalRead(NEW_GAME_KEY) == LOW) {
         reset6502();
@@ -136,12 +162,21 @@ extern "C" {
         }
       }
       return result;
-    }
+    } else if (address == CKINT) {
+      // Read the RRIOT timer. Used to get a random number for opening moves.
+      return random(0, 32);
+    } else if (address == CLKRDI) {
+      // Return 0x80 if the "interrupt" has been triggered, 0x00 otherwise.
+      return int_flag;
+    } else if (address == CLKRDT) {
+      // Current value of the timer countdown?
+      return 0x00;
+    } 
   }
 
   // Handle writes to RRIOT registers.
   void writeRRIOT(uint16_t address, uint8_t value) {
-    if (address == 0) {                 // Port A Data
+    if (address == SAD) {                 // Port A Data
       // PA0 - PA7 Data Register (SAD)
       // Maps to Pro Mini pins 0 - 7
       if ((value & 0b00000001) > 0) {
@@ -190,7 +225,7 @@ extern "C" {
       } else {
         digitalWrite(LOSES_LED, LOW);
       }
-    } else if (address == 1) {          // Port A Data Direction
+    } else if (address == PADD) {          // Port A Data Direction
       // PA0 - PA7 Data Direction Register (PADD)
       if (value == 128) {
         pinMode(PA0, INPUT_PULLUP);
@@ -211,7 +246,7 @@ extern "C" {
         pinMode(PA6, OUTPUT);
         pinMode(PA7, OUTPUT);;
       }
-    } else if (address == 2) {          // Port B Data
+    } else if (address == SBD) {          // Port B Data
       // PB0 - PB7 Data Register (SBD)
       // Remember the last value written to this register.
       sbc_value = value;
@@ -266,9 +301,34 @@ extern "C" {
       } else {
         digitalWrite(B_W_LED, HIGH);
       }
-    } else if (address == 3) {            // Port B Data Direction
+    } else if (address == PBDD) {            // Port B Data Direction
       // PB0 - PB7 Data Direction Register (PBDD)
-      // Does not directly map to specific pins. Will always be output.
+      // Does not directly map to specific pins. Will always be output. 0x7F
+    } else if (address == CLKTI) {
+      // Restart timer interrupt. 
+      int_start = millis();
+      int_flag = 0;
+    } else if (address == CLK1T) {
+      // Disable interrupts.
+      int_start = 0;
+    } 
+  }
+  extern "C" { 
+    void printhex(uint16_t val) {
+      Serial.print(val, HEX);
+      Serial.print(" ");
+      Serial.print(val);
+      Serial.println();
+    }
+    void print_instruction(char r_w, uint16_t pc, uint16_t address, uint8_t val) {
+      Serial.print(r_w);
+      Serial.print(" ");
+      Serial.print(pc,HEX);
+      Serial.print(" ");
+      Serial.print(address,HEX);
+      Serial.print(" ");
+      Serial.print(val,HEX);
+      Serial.println();
     }
   }
 } 
